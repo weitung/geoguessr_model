@@ -1,0 +1,11 @@
+geoclip
+torch
+torchvision
+datasets
+Pillow
+pandas
+numpy
+pyyaml
+tqdm
+scikit-learn
+matplotlib

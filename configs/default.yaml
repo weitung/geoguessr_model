@@ -1,0 +1,36 @@
+# GeoGuessr Model Training Configuration
+
+# Data
+data:
+  dataset_name: "marcelomoreno26/geoguessr"
+  data_dir: "data/raw"
+  image_size: 224
+  seed: 42
+
+# Model
+model:
+  freeze_clip: true
+  hidden_dim: 512
+  dropout: 0.1
+
+# Training
+training:
+  batch_size: 32
+  num_epochs: 30
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  scheduler: "cosine"
+  warmup_epochs: 2
+  patience: 7                # Early stopping patience
+  num_workers: 4
+  pin_memory: true
+
+# Checkpointing
+checkpoint:
+  save_dir: "checkpoints"
+  save_best: true
+  metric: "accuracy"         # Metric to track for best model
+
+# Logging
+logging:
+  log_interval: 50           # Print every N batches
