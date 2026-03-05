@@ -207,6 +207,145 @@ class GeoGuessrDataset(Dataset):
         }
 
 
+class GeoGuessrMapDataset(Dataset):
+    """Dataset from a scraped GeoGuessr map (metadata.csv + image files).
+
+    Each sample returns:
+    - image: preprocessed image tensor (3, H, W)
+    - label: integer country label
+    - coords: (lat, lng) tuple
+    """
+
+    def __init__(
+        self,
+        metadata_csv: str,
+        image_size: int = 224,
+        country_mapper: CountryMapper = None,
+        augment: bool = False,
+    ):
+        import csv
+
+        self.image_size = image_size
+
+        # Load metadata
+        self.samples = []
+        with open(metadata_csv) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                cc = row.get("country_code", "").strip()
+                if not cc:
+                    continue
+                self.samples.append({
+                    "image_path": row["image_path"],
+                    "lat": float(row["latitude"]),
+                    "lng": float(row["longitude"]),
+                    "heading": float(row.get("heading", 0)),
+                    "pitch": float(row.get("pitch", 0)),
+                    "country_code": cc,
+                })
+
+        # Build country mapper from data if not provided
+        if country_mapper is None:
+            all_codes = sorted(set(s["country_code"] for s in self.samples))
+            self.country_mapper = CountryMapper(all_codes)
+        else:
+            self.country_mapper = country_mapper
+            # Filter samples to only include known countries
+            self.samples = [
+                s for s in self.samples
+                if s["country_code"] in self.country_mapper.country_to_idx
+            ]
+
+        # CLIP-style preprocessing
+        if augment:
+            self.transform = transforms.Compose([
+                transforms.RandomResizedCrop(
+                    image_size, scale=(0.8, 1.0),
+                    interpolation=transforms.InterpolationMode.BICUBIC,
+                ),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711],
+                ),
+            ])
+        else:
+            self.transform = transforms.Compose([
+                transforms.Resize(
+                    image_size,
+                    interpolation=transforms.InterpolationMode.BICUBIC,
+                ),
+                transforms.CenterCrop(image_size),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711],
+                ),
+            ])
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> dict:
+        s = self.samples[idx]
+
+        img = Image.open(s["image_path"])
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        image = self.transform(img)
+
+        label = self.country_mapper.encode(s["country_code"])
+
+        return {
+            "image": image,
+            "label": torch.tensor(label, dtype=torch.long),
+            "coords": torch.tensor([s["lat"], s["lng"]], dtype=torch.float32),
+        }
+
+
+def create_map_datasets(
+    metadata_csv: str,
+    image_size: int = 224,
+    augment_train: bool = True,
+    train_ratio: float = 0.8,
+    val_ratio: float = 0.1,
+    seed: int = 42,
+) -> tuple["GeoGuessrMapDataset", "GeoGuessrMapDataset", "GeoGuessrMapDataset", CountryMapper]:
+    """Create train/val/test splits from a scraped GeoGuessr map dataset.
+
+    Returns (train_ds, val_ds, test_ds, country_mapper).
+    """
+    from torch.utils.data import Subset
+
+    full_ds = GeoGuessrMapDataset(metadata_csv, image_size, augment=False)
+    mapper = full_ds.country_mapper
+
+    n = len(full_ds)
+    indices = list(range(n))
+    rng = np.random.RandomState(seed)
+    rng.shuffle(indices)
+
+    n_train = int(n * train_ratio)
+    n_val = int(n * val_ratio)
+
+    train_idx = indices[:n_train]
+    val_idx = indices[n_train:n_train + n_val]
+    test_idx = indices[n_train + n_val:]
+
+    train_ds = GeoGuessrMapDataset(metadata_csv, image_size, country_mapper=mapper, augment=augment_train)
+    val_ds = GeoGuessrMapDataset(metadata_csv, image_size, country_mapper=mapper, augment=False)
+    test_ds = GeoGuessrMapDataset(metadata_csv, image_size, country_mapper=mapper, augment=False)
+
+    return (
+        Subset(train_ds, train_idx),
+        Subset(val_ds, val_idx),
+        Subset(test_ds, test_idx),
+        mapper,
+    )
+
+
 def create_datasets(
     data_dir: str = "data/raw/geoguessr",
     image_size: int = 224,
